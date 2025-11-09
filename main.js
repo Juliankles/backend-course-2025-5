@@ -1,10 +1,11 @@
-// Імпорт потрібних модулів 
+// Імпорт необхідних модулів
 import http from 'http';
 import fs from 'fs/promises';
 import path from 'path';
 import { Command } from 'commander';
+import superagent from 'superagent';
 
-// Налаштування CLI аргументів 
+// Параметри командного рядка 
 const program = new Command();
 program
   .requiredOption('-h, --host <host>', 'Server host')
@@ -14,7 +15,7 @@ program.parse(process.argv);
 
 const { host, port, cache } = program.opts();
 
-// Перевірка і створення директорії кешу 
+// Перевірка/створення папки кешу
 async function ensureCacheDir() {
   try {
     await fs.mkdir(cache, { recursive: true });
@@ -25,40 +26,60 @@ async function ensureCacheDir() {
   }
 }
 
-// Допоміжна функція для отримання шляху файлу
+// Функція для шляху до файлу 
 function getFilePath(code) {
   return path.join(cache, `${code}.jpg`);
 }
 
-// Головний HTTP-сервер 
+// Основний сервер 
 async function startServer() {
   await ensureCacheDir();
 
   const server = http.createServer(async (req, res) => {
     const method = req.method;
     const url = new URL(req.url, `http://${host}:${port}`);
-    const code = url.pathname.slice(1); // наприклад /200 → "200"
+    const code = url.pathname.slice(1);
 
     if (!code) {
       res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
-      return res.end('Не вказано код! Наприклад /200 або /404');
+      return res.end('Не вказано код статусу! Спробуйте /200 або /404');
     }
 
     const filePath = getFilePath(code);
 
     try {
-      // GET 
+      //  GET 
       if (method === 'GET') {
+        // спроба прочитати з кешу
         try {
-          const file = await fs.readFile(filePath);
+          const cached = await fs.readFile(filePath);
           console.log(` Відправлено з кешу: ${filePath}`);
           res.writeHead(200, { 'Content-Type': 'image/jpeg' });
-          return res.end(file);
+          return res.end(cached);
         } catch (err) {
-          if (err.code === 'ENOENT') {
-            res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-            return res.end('Файл не знайдено у кеші');
-          } else throw err;
+          if (err.code !== 'ENOENT') throw err;
+        }
+
+        // якщо файлу немає — завантажити з http.cat
+        try {
+          console.log(` Завантаження зображення з https://http.cat/${code}`);
+          const response = await superagent
+            .get(`https://http.cat/${code}`)
+            .buffer(true)
+            .parse((r, fn) => {
+              const chunks = [];
+              r.on('data', c => chunks.push(c));
+              r.on('end', () => fn(null, Buffer.concat(chunks)));
+            });
+
+          const image = response.body;
+          await fs.writeFile(filePath, image);
+          console.log(` Збережено у кеш: ${filePath}`);
+          res.writeHead(200, { 'Content-Type': 'image/jpeg' });
+          return res.end(image);
+        } catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Зображення не знайдено на http.cat');
         }
       }
 
@@ -68,7 +89,7 @@ async function startServer() {
         for await (const chunk of req) chunks.push(chunk);
         const body = Buffer.concat(chunks);
         await fs.writeFile(filePath, body);
-        console.log(`Додано файл у кеш: ${filePath}`);
+        console.log(` Додано файл у кеш: ${filePath}`);
         res.writeHead(201, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('Файл збережено у кеші');
       }
