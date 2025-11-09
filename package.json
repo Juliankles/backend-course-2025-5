@@ -18,6 +18,7 @@
   },
   "homepage": "https://github.com/JulianKles/backend-course-2025-5#readme",
   "dependencies": {
-    "commander": "^14.0.2"
+    "commander": "^14.0.2",
+    "superagent": "^10.2.3"
   }
 }
